@@ -12,8 +12,20 @@ describe('encode', () => {
     )
   })
 
-  it('throws when encoding floats', () => {
-    expect(() => encode({ value: 3.14 })).toThrow()
+  it('encodes finite non-integer numbers as CBOR float64', () => {
+    // Bare finite numbers are valid LexValues; the encoder routes
+    // non-integer values to the cborg default (8-byte float64) rather than
+    // throwing.
+    const bytes = encode({ value: 3.14 })
+    expect(decode(bytes)).toStrictEqual({ value: 3.14 })
+    // 0xfb is the CBOR major type tag for 8-byte float.
+    expect(bytes).toContain(0xfb)
+  })
+
+  it('throws when encoding NaN or Infinity', () => {
+    expect(() => encode({ value: NaN })).toThrow()
+    expect(() => encode({ value: Infinity })).toThrow()
+    expect(() => encode({ value: -Infinity })).toThrow()
   })
 
   it('Supports encoding "undefined" values', () => {

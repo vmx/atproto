@@ -210,9 +210,9 @@ describe(lexMap, () => {
   describe('rejects invalid value types', () => {
     const schema = lexMap()
 
-    it('rejects objects with floating point numbers', () => {
+    it('accepts objects with floating point numbers', () => {
       const result = schema.safeParse({ value: 3.14 })
-      expect(result.success).toBe(false)
+      expect(result.success).toBe(true)
     })
 
     it('rejects objects with NaN values', () => {
@@ -290,20 +290,20 @@ describe(lexMap, () => {
   describe('rejects invalid nested values', () => {
     const schema = lexMap()
 
-    it('rejects deeply nested invalid values', () => {
+    it('rejects deeply nested NaN values', () => {
       const result = schema.safeParse({
         nested: {
           deep: {
-            invalid: 3.14,
+            invalid: NaN,
           },
         },
       })
       expect(result.success).toBe(false)
     })
 
-    it('rejects arrays with invalid values', () => {
+    it('rejects arrays with NaN values', () => {
       const result = schema.safeParse({
-        items: [1, 2, 3.14],
+        items: [1, 2, NaN],
       })
       expect(result.success).toBe(false)
     })
@@ -315,11 +315,11 @@ describe(lexMap, () => {
       expect(result.success).toBe(false)
     })
 
-    it('rejects nested arrays with invalid values', () => {
+    it('rejects nested arrays with Infinity values', () => {
       const result = schema.safeParse({
         matrix: [
           [1, 2],
-          [3, 4.5],
+          [3, Infinity],
         ],
       })
       expect(result.success).toBe(false)

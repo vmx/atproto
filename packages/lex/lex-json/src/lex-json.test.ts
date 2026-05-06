@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { LexValue, lexEquals, parseCid } from '@atproto/lex-data'
+import { LexFloat, LexValue, lexEquals, parseCid } from '@atproto/lex-data'
 import { JsonValue } from './json.js'
 import {
   jsonToLex,
@@ -264,12 +264,6 @@ export const acceptableVectors: Array<{
     json: {
       $type: 3124,
       foo: 'bar',
-    },
-  },
-  {
-    note: 'object with float values',
-    json: {
-      a: 1.5,
     },
   },
   {
@@ -661,24 +655,23 @@ describe('lexParseJsonBytes strict mode error parity with lexParse', () => {
     })
   })
 
-  describe('float numbers: strict throws TypeError, non-strict accepts', () => {
+  describe('float numbers: wrapped as LexFloat in both modes', () => {
     const jsonStr = '{"value":1.5}'
 
-    test('lexParse strict throws TypeError with value in message', () => {
-      expect(() => lexParse(jsonStr, { strict: true })).toThrow(TypeError)
-      expect(() => lexParse(jsonStr, { strict: true })).toThrow(
-        'Invalid non-integer number: 1.5',
-      )
+    test('lexParse strict wraps float in LexFloat', () => {
+      const result = lexParse(jsonStr, { strict: true }) as {
+        value: LexFloat
+      }
+      expect(result.value).toBeInstanceOf(LexFloat)
+      expect(result.value.value).toBe(1.5)
     })
 
-    test('lexParseJsonBytes strict throws same TypeError', () => {
-      const bytes = Buffer.from(jsonStr)
-      expect(() => lexParseJsonBytes(bytes, { strict: true })).toThrow(
-        TypeError,
-      )
-      expect(() => lexParseJsonBytes(bytes, { strict: true })).toThrow(
-        'Invalid non-integer number: 1.5',
-      )
+    test('lexParseJsonBytes strict wraps float in LexFloat', () => {
+      const result = lexParseJsonBytes(Buffer.from(jsonStr), {
+        strict: true,
+      }) as { value: LexFloat }
+      expect(result.value).toBeInstanceOf(LexFloat)
+      expect(result.value.value).toBe(1.5)
     })
 
     test('lexParse non-strict accepts float', () => {
@@ -692,25 +685,37 @@ describe('lexParseJsonBytes strict mode error parity with lexParse', () => {
     })
   })
 
-  describe('exponent notation: safe integers accepted, unsafe integers rejected', () => {
-    test('lexParse strict accepts 1e10 (safe integer)', () => {
-      expect(lexParse('1e10', { strict: true })).toBe(1e10)
+  describe('exponent notation: wrapped as LexFloat regardless of magnitude', () => {
+    // Exponent notation (`e`/`E`) carries explicit float intent at the JSON
+    // source level, so the reviver wraps these in LexFloat even when the
+    // value is a safe integer. Unsafe-integer magnitudes no longer throw —
+    // they are valid floats.
+    test('lexParse strict wraps 1e10 in LexFloat', () => {
+      const result = lexParse('1e10', { strict: true }) as LexFloat
+      expect(result).toBeInstanceOf(LexFloat)
+      expect(result.value).toBe(1e10)
     })
 
-    test('lexParseJsonBytes strict accepts 1e10 (safe integer)', () => {
-      expect(lexParseJsonBytes(Buffer.from('1e10'), { strict: true })).toBe(
-        1e10,
-      )
+    test('lexParseJsonBytes strict wraps 1e10 in LexFloat', () => {
+      const result = lexParseJsonBytes(Buffer.from('1e10'), {
+        strict: true,
+      }) as LexFloat
+      expect(result).toBeInstanceOf(LexFloat)
+      expect(result.value).toBe(1e10)
     })
 
-    test('lexParse strict rejects 1e20 (unsafe integer)', () => {
-      expect(() => lexParse('1e20', { strict: true })).toThrow(TypeError)
+    test('lexParse strict wraps 1e20 in LexFloat', () => {
+      const result = lexParse('1e20', { strict: true }) as LexFloat
+      expect(result).toBeInstanceOf(LexFloat)
+      expect(result.value).toBe(1e20)
     })
 
-    test('lexParseJsonBytes strict rejects 1e20 (unsafe integer)', () => {
-      expect(() =>
-        lexParseJsonBytes(Buffer.from('1e20'), { strict: true }),
-      ).toThrow(TypeError)
+    test('lexParseJsonBytes strict wraps 1e20 in LexFloat', () => {
+      const result = lexParseJsonBytes(Buffer.from('1e20'), {
+        strict: true,
+      }) as LexFloat
+      expect(result).toBeInstanceOf(LexFloat)
+      expect(result.value).toBe(1e20)
     })
   })
 
@@ -987,5 +992,47 @@ describe('lexParseJsonBytes strict mode error parity with lexParse', () => {
         lexParseJsonBytes(Buffer.from(nonStringTypeJson), { strict: false }),
       ).not.toThrow()
     })
+  })
+})
+
+describe('LexFloat round-trip', () => {
+  // The JSON textual form is the source of truth for int vs float intent:
+  // a number whose source contained `.`, `e`, or `E` is a float, everything
+  // else is an integer. lexParse wraps floats in LexFloat; lexStringify
+  // emits them back with a forced decimal point for integer-valued floats.
+  test('preserves textual form through parse + stringify', () => {
+    const input = '{"a":65,"b":65.0,"c":3.14,"d":[1,2.5,{"x":9.0}]}'
+    const parsed = lexParse(input)
+    expect(lexStringify(parsed)).toBe(input)
+  })
+
+  test('wraps only decimal-pointed numbers, leaves integers bare', () => {
+    const parsed = lexParse('{"i":42,"f":42.0}') as {
+      i: number
+      f: LexFloat
+    }
+    expect(parsed.i).toBe(42)
+    expect(parsed.f).toBeInstanceOf(LexFloat)
+    expect(parsed.f.value).toBe(42)
+  })
+
+  test('stringify preserves .0 for integer-valued LexFloat', () => {
+    expect(lexStringify(new LexFloat(1))).toBe('1.0')
+    expect(lexStringify(new LexFloat(0))).toBe('0.0')
+    expect(lexStringify(new LexFloat(-5))).toBe('-5.0')
+  })
+
+  test('stringify leaves non-integer LexFloat as-is', () => {
+    expect(lexStringify(new LexFloat(3.14))).toBe('3.14')
+  })
+
+  test('lexToJson unwraps LexFloat (lossy)', () => {
+    expect(lexToJson(new LexFloat(1))).toBe(1)
+    expect(lexToJson(new LexFloat(3.14))).toBe(3.14)
+  })
+
+  test('jsonToLex passes LexFloat through untouched', () => {
+    const wrapper = new LexFloat(1)
+    expect(jsonToLex(wrapper)).toBe(wrapper)
   })
 })

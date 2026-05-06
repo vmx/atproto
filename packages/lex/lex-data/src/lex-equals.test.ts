@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { LexFloat } from './lex-float.js'
 import { parseCid } from './cid.js'
 import { lexEquals } from './lex-equals.js'
 import { LexValue } from './lex.js'
@@ -128,6 +129,28 @@ describe('lexEquals', () => {
     expectLexEqual(lex1, lex2, true)
     expectLexEqual(lex1, lex3, false)
     expectLexEqual(lex2, lex3, false)
+  })
+
+  it('compares LexFloat wrappers', () => {
+    expectLexEqual(new LexFloat(1.5), new LexFloat(1.5), true)
+    expectLexEqual(new LexFloat(65), new LexFloat(65), true)
+    expectLexEqual(new LexFloat(1), new LexFloat(2), false)
+
+    // The wrapper carries the int/float distinction, so a `LexFloat(65)`
+    // is deliberately *not* equal to a bare `65`.
+    expectLexEqual(new LexFloat(65), 65, false)
+    expectLexEqual(new LexFloat(1.5), 1.5, false)
+
+    expectLexEqual(
+      { temperature: new LexFloat(36.5) },
+      { temperature: new LexFloat(36.5) },
+      true,
+    )
+    expectLexEqual(
+      { temperature: new LexFloat(36.5) },
+      { temperature: 36.5 },
+      false,
+    )
   })
 
   it('allows comparing invalid numbers (floats, NaN, Infinity)', () => {

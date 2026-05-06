@@ -1,3 +1,4 @@
+import { LexFloat, isLexFloat } from './lex-float.js'
 import { Cid, isCid } from './cid.js'
 import { isPlainObject } from './object.js'
 
@@ -5,16 +6,27 @@ import { isPlainObject } from './object.js'
  * Primitive values in the Lexicon data model.
  *
  * Represents the basic scalar types that can appear in AT Protocol data:
- * - `number` - Integer values only (no floats)
+ * - `number` - Any finite JavaScript number. A bare number is encoded as a
+ *   CBOR integer when it is integer-valued and as a float otherwise; wrap
+ *   integer-valued numbers in {@link LexFloat} to force float encoding.
  * - `string` - UTF-8 text
  * - `boolean` - true or false
  * - `null` - Explicit null value
  * - `Cid` - Content Identifier (link by hash)
  * - `Uint8Array` - Binary data (bytes)
+ * - {@link LexFloat} - Wrapper that tags a number as a float regardless of
+ *   whether it is integer-valued
  *
  * @see {@link LexValue} for the complete recursive value type
  */
-export type LexScalar = number | string | boolean | null | Cid | Uint8Array
+export type LexScalar =
+  | number
+  | string
+  | boolean
+  | null
+  | Cid
+  | Uint8Array
+  | LexFloat
 
 /**
  * Any valid Lexicon value (recursive type).
@@ -122,7 +134,13 @@ export function isLexArray(value: unknown): value is LexArray {
  * Type guard to check if a value is a valid {@link LexScalar}.
  *
  * Returns true if the value is one of the primitive Lexicon types:
- * number (integer only), string, boolean, null, Cid, or Uint8Array.
+ * number (any finite value), string, boolean, null, Cid, Uint8Array, or
+ * {@link LexFloat}.
+ *
+ * `NaN` and `Infinity` are rejected because they cannot be represented in
+ * the AT Protocol data model. A bare finite number alone does not commit to
+ * an integer or float wire encoding — wrap it in {@link LexFloat} when the
+ * float distinction matters.
  *
  * @param value - The value to check
  * @returns `true` if the value is a valid LexScalar
@@ -131,22 +149,28 @@ export function isLexArray(value: unknown): value is LexArray {
  * ```typescript
  * import { isLexScalar } from '@atproto/lex'
  *
- * isLexScalar('hello')     // true
- * isLexScalar(42)          // true
- * isLexScalar(3.14)        // false (floats not allowed)
- * isLexScalar([1, 2])      // false (arrays are not scalars)
+ * isLexScalar('hello')          // true
+ * isLexScalar(42)               // true
+ * isLexScalar(3.14)             // true
+ * isLexScalar(new LexFloat(65)) // true
+ * isLexScalar(NaN)              // false
+ * isLexScalar([1, 2])           // false (arrays are not scalars)
  * ```
  */
 export function isLexScalar(value: unknown): value is LexScalar {
   switch (typeof value) {
     case 'object':
-      return value === null || value instanceof Uint8Array || isCid(value)
+      return (
+        value === null ||
+        value instanceof Uint8Array ||
+        isCid(value) ||
+        isLexFloat(value)
+      )
     case 'string':
     case 'boolean':
       return true
     case 'number':
-      if (Number.isInteger(value)) return true
-    // fallthrough
+      return Number.isFinite(value)
     default:
       return false
   }
