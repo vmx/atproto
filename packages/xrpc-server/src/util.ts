@@ -9,7 +9,7 @@ import {
 } from 'express'
 import { contentType } from 'mime-types'
 import { MaxSizeChecker, createDecoders } from '@atproto/common'
-import { jsonToLex } from '@atproto/lex-json'
+import { floatPreservingReviver, jsonToLex } from '@atproto/lex-json'
 import { l } from '@atproto/lex-schema'
 import {
   type LexXrpcBody,
@@ -320,7 +320,16 @@ export function createSchemaInputVerifier<M extends l.Procedure | l.Query>(
     }
   }
 
-  const bodyParser = createBodyParser(input.encoding, options)
+  // The schema-aware path wraps floats at `JSON.parse` time so that a JSON
+  // source like `65.0` survives as a `LexFloat` through validation and back
+  // into the CBOR encoder. The legacy `createLexiconInputVerifier` path omits
+  // this reviver because the legacy lexicon validators would reject the
+  // wrapper.
+  const bodyParser = createBodyParser(
+    input.encoding,
+    options,
+    floatPreservingReviver,
+  )
 
   return async (req, res) => {
     if (getBodyPresence(req) === 'missing') {
@@ -521,13 +530,21 @@ function getBodyPresence(req: IncomingMessage): BodyPresence {
   return 'missing'
 }
 
-function createBodyParser(inputEncoding: string, options: RouteOptions) {
+function createBodyParser(
+  inputEncoding: string,
+  options: RouteOptions,
+  // Passed through to body-parser's `json()`, which hands it to `JSON.parse`
+  // verbatim. Used by the schema-aware path to wrap float-typed numbers in
+  // {@link LexFloat} at parse time — before the int/float distinction in the
+  // JSON source text is lost.
+  jsonReviver?: (key: string, value: unknown) => unknown,
+) {
   if (inputEncoding === ENCODING_ANY) {
     // When the lexicon's input encoding is */*, the handler will determine how to process it
     return
   }
   const { jsonLimit, textLimit } = options
-  const jsonParser = json({ limit: jsonLimit })
+  const jsonParser = json({ limit: jsonLimit, reviver: jsonReviver })
   const textParser = text({ limit: textLimit })
   // Transform json and text parser middlewares into a single function
   return (req: ExpressRequest, res: ExpressResponse) => {

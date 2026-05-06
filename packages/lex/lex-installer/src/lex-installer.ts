@@ -449,6 +449,7 @@ function* defRefs(
     case 'bytes':
     case 'blob':
     case 'integer':
+    case 'float':
     case 'unknown':
       // @NOTE We explicitly list all types here to ensure exhaustiveness
       // causing TS to error if a new type is added without updating this switch

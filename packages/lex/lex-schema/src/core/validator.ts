@@ -156,11 +156,17 @@ export type ValidationOptions = {
    *   strictly equal to the input value. No transformations such as applying
    *   default values are allowed.
    * - `"parse"`: Allows the schema to transform the input value, such as
-   *   applying default values or performing type coercion.
+   *   applying default values or performing type coercion. Validation
+   *   issues fail the result.
+   * - `"coerce"`: Like `"parse"` but validation issues are silently
+   *   swallowed — the input is returned unchanged at the failure site.
+   *   Use this when you want wire-form coercion (e.g. wrapping bare
+   *   numbers in `LexFloat` at float-typed fields) without imposing
+   *   schema validation on the caller.
    *
    * @default "validate"
    */
-  mode?: 'validate' | 'parse'
+  mode?: 'validate' | 'parse' | 'coerce'
 
   /**
    * The initial path to the value being validated.
@@ -232,6 +238,27 @@ export class ValidationContext {
     validator: V,
     options: ValidationOptions & {
       mode: 'parse'
+    },
+  ): ValidationResult<InferOutput<V>>
+
+  /**
+   * Validates input against a validator in coerce mode.
+   *
+   * In coerce mode, the schema may transform the input (e.g., wrapping
+   * bare numbers in `LexFloat` at float-typed paths) but validation
+   * failures are silently swallowed: the input flows through unchanged
+   * at the failure site. The overall result always succeeds.
+   *
+   * @param input - The value to coerce
+   * @param validator - The validator to use
+   * @param options - Validation options with mode set to 'coerce'
+   * @returns A successful validation result
+   */
+  static validate<V extends Validator>(
+    input: unknown,
+    validator: V,
+    options: ValidationOptions & {
+      mode: 'coerce'
     },
   ): ValidationResult<InferOutput<V>>
 
@@ -349,11 +376,12 @@ export class ValidationContext {
         return new LexValidationError(Array.from(this.issues))
       }
 
-      if (this.options.mode !== 'parse' && !Object.is(result.value, input)) {
+      if (this.options.mode === 'validate' && !Object.is(result.value, input)) {
         // If the value changed, it means that a default (or some other
         // transformation) was applied, meaning that the original value did
-        // *not* match the (output) schema. When not in "parse" mode, we
-        // consider this a failure.
+        // *not* match the (output) schema. In strict "validate" mode, we
+        // consider this a failure. Both "parse" and "coerce" modes accept
+        // transformed values.
 
         // This check is the reason why Validator.validateInContext should not
         // be used directly, and ValidatorContext.validate should be used
@@ -365,6 +393,13 @@ export class ValidationContext {
         // "failure" method below), resulting in a more complete error report.
         return this.issueInvalidValue(input, [result.value])
       }
+    } else if (this.options.mode === 'coerce') {
+      // In "coerce" mode, validation failures are swallowed: the input is
+      // returned at the failure site and any partial transformations from
+      // upstream still apply. This lets callers opt into wire-form coercion
+      // without imposing schema validation. Issues collected by sibling
+      // schemas via `addIssue` are also dropped — see `addIssue` below.
+      return this.success(input) as ValidationResult<InferInput<V>>
     }
 
     return result as ValidationResult<InferInput<V>>
@@ -425,6 +460,9 @@ export class ValidationContext {
    * @param issue - The validation issue to add
    */
   addIssue(issue: Issue): void {
+    // In coerce mode, all validation diagnostics are discarded so the input
+    // can flow through unchanged.
+    if (this.options.mode === 'coerce') return
     this.issues.push(issue)
   }
 

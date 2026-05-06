@@ -846,8 +846,16 @@ export class Client implements Agent {
     options: CreateOptions<T> = {} as CreateOptions<T>,
   ): Promise<CreateOutput> {
     const schema: T = getMain(ns)
-    const record = schema.build(input) as TypedLexMap<NsidString>
-    if (options?.validateRequest) schema.validate(record)
+    // Always run the input through the schema so wire-form coercion happens
+    // (bare numbers at float-typed paths become `LexFloat` so the JSON
+    // serialiser emits `65.0`; CID strings become `Cid`; etc.). When
+    // `validateRequest` is enabled, use parse mode so validation issues
+    // throw locally; otherwise use coerce mode which swallows validation
+    // issues and lets the caller send anything they like.
+    const built = schema.build(input)
+    const record = (
+      options?.validateRequest ? schema.parse(built) : schema.coerce(built)
+    ) as TypedLexMap<NsidString>
     const rkey = options.rkey ?? getDefaultRecordKey(schema)
     if (rkey !== undefined) schema.keySchema.assert(rkey)
     const response = await this.createRecord(record, rkey, options)
@@ -943,8 +951,11 @@ export class Client implements Agent {
     options: PutOptions<T> = {} as PutOptions<T>,
   ): Promise<PutOutput> {
     const schema: T = getMain(ns)
-    const record = schema.build(input) as TypedLexMap<NsidString>
-    if (options?.validateRequest) schema.validate(record)
+    // See `create` for the rationale — coerce always, parse on opt-in.
+    const built = schema.build(input)
+    const record = (
+      options?.validateRequest ? schema.parse(built) : schema.coerce(built)
+    ) as TypedLexMap<NsidString>
     const rkey = options.rkey ?? getLiteralRecordKey(schema)
     const response = await this.putRecord(record, rkey, options)
     return response.body

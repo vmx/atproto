@@ -23,6 +23,12 @@ export type ParseOptions = Omit<ValidationOptions, 'mode'>
 export type ValidateOptions = Omit<ValidationOptions, 'mode'>
 
 /**
+ * Options for coerce operations.
+ * Excludes the `mode` option as it is implicitly set to `"coerce"`.
+ */
+export type CoerceOptions = Omit<ValidationOptions, 'mode'>
+
+/**
  * Internal type structure for schema type inference.
  *
  * This interface defines the phantom types used for compile-time type inference
@@ -300,6 +306,53 @@ export abstract class Schema<out TInput = unknown, out TOutput = TInput>
     })
   }
 
+  /**
+   * Coerces the input toward the schema's wire form, suppressing validation
+   * failures.
+   *
+   * Like {@link parse}, this method allows the schema to transform the input
+   * (e.g. wrapping bare numbers in `LexFloat` at float-typed paths). Unlike
+   * {@link parse}, validation issues are silently swallowed: the input flows
+   * through unchanged at the failure site. The returned value always
+   * succeeds.
+   *
+   * Use this when you want schema-aware transformations (defaults, type
+   * coercion) without imposing schema validation on the caller — for
+   * instance, on the producer side of a wire protocol where the receiver
+   * will validate.
+   *
+   * @param input - The value to coerce
+   * @param options - Optional configuration
+   * @returns The coerced value
+   */
+  coerce(input: unknown, options?: CoerceOptions): InferOutput<this> {
+    const result = this.safeCoerce(input, options)
+    // Coerce mode never fails — the helper always returns success — but the
+    // shared return type union still includes the failure branch.
+    if (result.success) return result.value
+    throw result.reason
+  }
+
+  /**
+   * Safely coerces the input, returning a result object.
+   *
+   * Coerce mode never produces a failure, but the result type matches the
+   * other safe* methods for symmetry.
+   *
+   * @param input - The value to coerce
+   * @param options - Optional configuration
+   * @returns A successful {@link ValidationResult}
+   */
+  safeCoerce(
+    input: unknown,
+    options?: CoerceOptions,
+  ): ValidationResult<InferOutput<this>> {
+    return ValidationContext.validate(input, this, {
+      ...options,
+      mode: 'coerce',
+    })
+  }
+
   // @NOTE Dollar-prefixed aliases
   //
   // The `lex-builder` lib generates namespaced utility functions that allow
@@ -408,5 +461,21 @@ export abstract class Schema<out TInput = unknown, out TOutput = TInput>
    */
   get $safeValidate(): typeof this.safeValidate {
     return lazyProperty(this, '$safeValidate', this.safeValidate.bind(this))
+  }
+
+  /**
+   * Bound alias for {@link coerce} for compatibility with generated utilities.
+   * @see {@link coerce}
+   */
+  get $coerce(): typeof this.coerce {
+    return lazyProperty(this, '$coerce', this.coerce.bind(this))
+  }
+
+  /**
+   * Bound alias for {@link safeCoerce} for compatibility with generated utilities.
+   * @see {@link safeCoerce}
+   */
+  get $safeCoerce(): typeof this.safeCoerce {
+    return lazyProperty(this, '$safeCoerce', this.safeCoerce.bind(this))
   }
 }

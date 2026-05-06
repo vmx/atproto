@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { LexInteger } from '@atproto/lex-data'
+import { assert, describe, expect, it } from 'vitest'
 import { integer } from './integer.js'
 import { withDefault } from './with-default.js'
 
@@ -79,6 +80,39 @@ describe('IntegerSchema', () => {
     it('rejects -Infinity', () => {
       const result = schema.safeParse(-Infinity)
       expect(result.success).toBe(false)
+    })
+  })
+
+  describe('LexInteger wrappers', () => {
+    const schema = integer()
+
+    it('accepts LexInteger wrapping a safe integer', () => {
+      const result = schema.safeParse(new LexInteger(42))
+      assert(result.success)
+      expect(result.value).toBeInstanceOf(LexInteger)
+      expect((result.value as LexInteger).value).toBe(42)
+    })
+
+    it('accepts LexInteger wrapping zero', () => {
+      expect(schema.safeParse(new LexInteger(0)).success).toBe(true)
+    })
+
+    it('accepts LexInteger wrapping negative integers', () => {
+      expect(schema.safeParse(new LexInteger(-7)).success).toBe(true)
+    })
+
+    it('preserves the wrapper through validation (no unwrap)', () => {
+      const wrapped = new LexInteger(42)
+      const result = schema.safeParse(wrapped)
+      assert(result.success)
+      expect(result.value).toBe(wrapped)
+    })
+
+    it('respects range constraints for LexInteger values', () => {
+      const ranged = integer({ minimum: 0, maximum: 100 })
+      expect(ranged.safeParse(new LexInteger(50)).success).toBe(true)
+      expect(ranged.safeParse(new LexInteger(150)).success).toBe(false)
+      expect(ranged.safeParse(new LexInteger(-1)).success).toBe(false)
     })
   })
 

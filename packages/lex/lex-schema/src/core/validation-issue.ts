@@ -190,7 +190,8 @@ export class IssueRequiredKey extends Issue {
  *
  * - `'array'` - Array length
  * - `'string'` - String length in characters
- * - `'integer'` - Numeric value
+ * - `'integer'` - Integer value
+ * - `'float'` - Floating-point value
  * - `'grapheme'` - String length in grapheme clusters
  * - `'bytes'` - Byte length
  * - `'blob'` - Blob size
@@ -199,6 +200,7 @@ export type MeasurableType =
   | 'array'
   | 'string'
   | 'integer'
+  | 'float'
   | 'grapheme'
   | 'bytes'
   | 'blob'

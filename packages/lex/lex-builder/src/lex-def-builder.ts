@@ -13,6 +13,7 @@ import {
   LexiconCid,
   LexiconDocument,
   LexiconError,
+  LexiconFloat,
   LexiconIndexer,
   LexiconInteger,
   LexiconObject,
@@ -611,6 +612,8 @@ export class LexDefBuilder {
         return this.compileBooleanSchema(def)
       case 'integer':
         return this.compileIntegerSchema(def)
+      case 'float':
+        return this.compileFloatSchema(def)
       case 'string':
         return this.compileStringSchema(def)
       case 'bytes':
@@ -641,6 +644,8 @@ export class LexDefBuilder {
         return this.compileBooleanType(def)
       case 'integer':
         return this.compileIntegerType(def)
+      case 'float':
+        return this.compileFloatType(def)
       case 'string':
         return this.compileStringType(def)
       case 'bytes':
@@ -734,6 +739,39 @@ export class LexDefBuilder {
   }
 
   private async compileIntegerType(def: LexiconInteger): Promise<string> {
+    if (hasConst(def)) return this.compileConstType(def)
+    if (hasEnum(def)) return this.compileEnumType(def)
+
+    return 'number'
+  }
+
+  private async compileFloatSchema(def: LexiconFloat): Promise<string> {
+    const schema = l.float(def)
+
+    if (hasConst(def)) {
+      schema.check(def.const)
+    }
+
+    if (hasEnum(def)) {
+      for (const val of def.enum) schema.check(val)
+    }
+
+    if (def.default !== undefined) {
+      schema.check(def.default)
+    }
+
+    if (hasConst(def)) return this.compileConstSchema(def)
+    if (hasEnum(def)) return this.compileEnumSchema(def)
+
+    const options = stringifyOptions(def, [
+      'maximum',
+      'minimum',
+    ] satisfies (keyof l.FloatSchemaOptions)[])
+
+    return this.withDefault(this.pure(`l.float(${options})`), def.default)
+  }
+
+  private async compileFloatType(def: LexiconFloat): Promise<string> {
     if (hasConst(def)) return this.compileConstType(def)
     if (hasEnum(def)) return this.compileEnumType(def)
 
