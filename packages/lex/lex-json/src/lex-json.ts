@@ -1,16 +1,65 @@
 import {
   BlobRef,
+  LexFloat,
   Cid,
   LexArray,
   LexMap,
   LexValue,
+  isLexFloat,
+  isLexInteger,
   isCid,
+  isPlainObject,
   utf8FromBytes,
 } from '@atproto/lex-data'
 import { parseTypedBlobRef } from './blob.js'
 import { encodeLexBytes, parseLexBytes } from './bytes.js'
-import { JsonObject, JsonValue } from './json.js'
+import { JsonObject, JsonScalar, JsonValue } from './json.js'
 import { encodeLexLink, parseLexLink } from './link.js'
+
+/**
+ * The shape produced by `JSON.parse` when run with
+ * {@link floatPreservingReviver}. Identical to {@link JsonValue} except that
+ * any number whose JSON source contained `.`, `e`, or `E` has been wrapped in
+ * a {@link LexFloat}. Every {@link JsonValue} is also a `RevivedJsonValue`,
+ * so existing call sites that pass plain `JsonValue` keep type-checking.
+ */
+export type RevivedJsonValue =
+  | JsonScalar
+  | LexFloat
+  | RevivedJsonValue[]
+  | { [_ in string]?: RevivedJsonValue }
+
+/**
+ * Object-shaped {@link RevivedJsonValue} — used internally by
+ * {@link jsonToLex}'s map walker.
+ */
+type RevivedJsonObject = { [_ in string]?: RevivedJsonValue }
+
+// The float-preserving reviver depends on the third argument added to
+// `JSON.parse` revivers in ES2023 (V8 11.3 / Node 21+). On older runtimes the
+// argument is missing, the reviver silently degrades to a no-op, and `65.0`
+// collapses back to `65` — destroying the int/float distinction without any
+// signal to the caller. Fail loudly at module load instead of at first float,
+// so misconfigured deployments surface the problem at startup.
+;(function assertJsonParseSourceContext(): void {
+  let supported = false
+  JSON.parse('1', (_key: string, value: unknown, context?: unknown) => {
+    if (
+      typeof context === 'object' &&
+      context !== null &&
+      typeof (context as { source?: unknown }).source === 'string'
+    ) {
+      supported = true
+    }
+    return value
+  })
+  if (!supported) {
+    throw new Error(
+      '@atproto/lex-json requires JSON.parse reviver source context (ES2023). ' +
+        'Upgrade to Node.js 21+ or a runtime with V8 11.3+.',
+    )
+  }
+})()
 
 /**
  * Serialize a Lex value to a JSON string.
@@ -36,10 +85,91 @@ import { encodeLexLink, parseLexLink } from './link.js'
  * ```
  */
 export function lexStringify(input: LexValue): string {
-  // @NOTE Because of the way the "replacer" works in JSON.stringify, it's
-  // simpler to convert Lex to JSON first rather than trying to do it
-  // on-the-fly.
-  return JSON.stringify(lexToJson(input))
+  // Fast path: if there are no {@link LexFloat} wrappers anywhere in the tree,
+  // delegate to the native `JSON.stringify` after the usual Lex→JSON
+  // conversion. The slow path is needed only because `JSON.stringify` cannot
+  // emit `65.0` for a numeric value — and that textual decimal point is the
+  // only way the AT Protocol JSON wire form carries the int/float distinction.
+  //
+  // The pre-pass walks the tree once but does no allocation and no string
+  // building; the slow path walks the tree once *and* hand-rolls the JSON.
+  // Most Lex values contain no floats, so paying the cheap walk to skip the
+  // slow path is a net win. When floats are present we accept the second walk
+  // — there is no in-place way to convert {@link LexFloat} to a JSON token
+  // because `JSON.stringify` resolves toJSON to a number before serialising.
+  if (!containsLexFloat(input)) {
+    return JSON.stringify(lexToJson(input))
+  }
+  return lexStringifyValue(input)
+}
+
+function containsLexFloat(value: LexValue): boolean {
+  if (isLexFloat(value)) return true
+  if (value === null || typeof value !== 'object') return false
+  if (ArrayBuffer.isView(value) || isCid(value)) return false
+  if (Array.isArray(value)) {
+    for (const item of value) if (containsLexFloat(item)) return true
+    return false
+  }
+  for (const v of Object.values(value)) {
+    if (v !== undefined && containsLexFloat(v as LexValue)) return true
+  }
+  return false
+}
+
+function lexStringifyValue(value: LexValue): string {
+  if (value === null) return 'null'
+  switch (typeof value) {
+    case 'boolean':
+      return value ? 'true' : 'false'
+    case 'string':
+      return JSON.stringify(value)
+    case 'number':
+      if (!Number.isFinite(value)) {
+        throw new TypeError(`Non-finite number in Lex value: ${value}`)
+      }
+      return String(value)
+    case 'object':
+      break
+    default:
+      throw new TypeError(`Invalid Lex value: ${typeof value}`)
+  }
+  if (isLexFloat(value)) return formatLexFloat(value)
+  if (isLexInteger(value)) return String(value.value)
+  if (isCid(value)) return JSON.stringify(encodeLexLink(value))
+  if (ArrayBuffer.isView(value)) return JSON.stringify(encodeLexBytes(value))
+  if (Array.isArray(value)) {
+    let out = '['
+    for (let i = 0; i < value.length; i++) {
+      if (i > 0) out += ','
+      out += lexStringifyValue(value[i])
+    }
+    return out + ']'
+  }
+  if (isPlainObject(value)) {
+    let out = '{'
+    let first = true
+    for (const [key, v] of Object.entries(value)) {
+      if (v === undefined) continue
+      if (!first) out += ','
+      first = false
+      out += JSON.stringify(key) + ':' + lexStringifyValue(v as LexValue)
+    }
+    return out + '}'
+  }
+  throw new TypeError('Invalid Lex value')
+}
+
+function formatLexFloat(wrapper: LexFloat): string {
+  const n = wrapper.value
+  if (!Number.isFinite(n)) {
+    throw new TypeError(`Non-finite number in LexFloat: ${n}`)
+  }
+  const s = String(n)
+  // `Number.prototype.toString` already emits `.` for non-integer values and
+  // `e` for very small/large magnitudes. Only integer-valued floats need the
+  // explicit `.0` to preserve the float distinction through JSON.parse.
+  return /[.eE]/.test(s) ? s : s + '.0'
 }
 
 /**
@@ -100,9 +230,42 @@ export function lexParse<T extends LexValue = LexValue>(
   input: string,
   options: LexParseOptions = { strict: false },
 ): T {
-  // @NOTE see ./lex-json.bench.ts for performance comparison of implementation
-  // that uses a reviver function in JSON.parse vs. the current implementation.
-  return jsonToLex(JSON.parse(input), options) as T
+  // Preserve the int/float distinction that is present in the JSON source text
+  // but lost by a naive `JSON.parse`. Numbers whose source contained `.`, `e`,
+  // or `E` are wrapped in {@link LexFloat}; plain digit-only numbers pass
+  // through as JS numbers. The context-aware third argument of the reviver was
+  // added in ES2023 (V8 11.3 / Node 21+) and asserted at module load.
+  return jsonToLex(
+    JSON.parse(input, floatPreservingReviver) as RevivedJsonValue,
+    options,
+  ) as T
+}
+
+type JsonParseContext = { readonly source: string }
+
+/**
+ * `JSON.parse` reviver that wraps any number whose JSON source text contained
+ * `.`, `e`, or `E` in a {@link LexFloat}. Digit-only numbers pass through as
+ * bare JS numbers.
+ *
+ * Exported so body parsers that do their own `JSON.parse` (e.g. an HTTP
+ * framework's JSON middleware) can opt into the same int/float-distinction
+ * preservation that {@link lexParse} applies internally.
+ *
+ * @remarks The third argument is ES2023 — Node 21+ / V8 11.3+. The module-load
+ * runtime assertion above guarantees the runtime supplies it; the parameter
+ * stays optional only so the function shape matches the 2-arg reviver type
+ * expected by `JSON.parse`-style APIs (e.g. body-parser's `json()`).
+ */
+export function floatPreservingReviver(
+  _key: string,
+  value: unknown,
+  context?: JsonParseContext,
+): unknown {
+  if (typeof value === 'number' && context && /[.eE]/.test(context.source)) {
+    return new LexFloat(value)
+  }
+  return value
 }
 
 /**
@@ -152,12 +315,13 @@ export function lexParseJsonBytes(
  * ```
  */
 export function jsonToLex(
-  value: JsonValue,
+  value: RevivedJsonValue,
   options: LexParseOptions = { strict: false },
 ): LexValue {
   switch (typeof value) {
     case 'object': {
       if (value === null) return null
+      if (isLexFloat(value)) return value
       if (Array.isArray(value)) return jsonArrayToLex(value, options)
       return (
         parseSpecialJsonObject(value, options) ??
@@ -177,7 +341,7 @@ export function jsonToLex(
 }
 
 function jsonArrayToLex(
-  input: JsonValue[],
+  input: RevivedJsonValue[],
   options: LexParseOptions,
 ): LexValue[] {
   // Lazily copy value
@@ -186,15 +350,15 @@ function jsonArrayToLex(
     const inputItem = input[i]
     const item = jsonToLex(inputItem, options)
     if (item !== inputItem) {
-      copy ??= Array.from(input)
+      copy ??= Array.from(input) as LexValue[]
       copy[i] = item
     }
   }
-  return copy ?? input
+  return (copy ?? input) as LexValue[]
 }
 
 function jsonObjectToLexMap(
-  input: JsonObject,
+  input: RevivedJsonObject,
   options: LexParseOptions,
 ): LexMap {
   // Lazily copy value
@@ -207,18 +371,18 @@ function jsonObjectToLexMap(
 
     // Ignore (strip) undefined values
     if (jsonValue === undefined) {
-      copy ??= { ...input }
+      copy ??= { ...input } as LexMap
       delete copy[key]
       continue
     }
 
-    const value = jsonToLex(jsonValue!, options)
+    const value = jsonToLex(jsonValue, options)
     if (value !== jsonValue) {
-      copy ??= { ...input }
+      copy ??= { ...input } as LexMap
       copy[key] = value
     }
   }
-  return copy ?? input
+  return (copy ?? input) as LexMap
 }
 
 /**
@@ -253,6 +417,16 @@ export function lexToJson(value: LexValue): JsonValue {
     case 'object':
       if (value === null) {
         return value
+      } else if (isLexFloat(value)) {
+        // Lossy: the int/float distinction carried by {@link LexFloat} cannot
+        // be represented in a plain {@link JsonValue}. Callers that need the
+        // distinction preserved on the wire must use {@link lexStringify}
+        // instead, which handles `LexFloat` directly at the text level.
+        return value.value
+      } else if (isLexInteger(value)) {
+        // {@link LexInteger} is purely a producer-side assertion — its
+        // wire form is identical to a bare integer, so unwrapping is safe.
+        return value.value
       } else if (Array.isArray(value)) {
         return lexArrayToJson(value)
       } else if (isCid(value)) {

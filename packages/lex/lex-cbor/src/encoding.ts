@@ -9,7 +9,14 @@ import {
   encode as cborgEncode,
 } from 'cborg'
 import { OptionalTypeEncoder } from 'cborg/lib/encode'
-import { Cid, LexValue, decodeCid, ifCid } from '@atproto/lex-data'
+import {
+  Cid,
+  LexValue,
+  decodeCid,
+  ifCid,
+  isLexFloat,
+  isLexInteger,
+} from '@atproto/lex-data'
 
 // @NOTE "cborg" version 4 is required to support multi-decoding via the
 // "decodeFirst" function. However, that version only exposes ES modules.
@@ -26,7 +33,11 @@ const CID_CBOR_TAG = 42
  * - CIDs are encoded using CBOR tag 42 with a leading 0x00 byte prefix
  * - Map keys must be strings (no numeric or other key types allowed)
  * - `undefined` values are not permitted (undefined object properties will be stripped)
- * - Only safe integer numbers are allowed (no floats or non-integer values)
+ * - `NaN` and `Infinity` are rejected; finite numbers are encoded as CBOR
+ *   uint when integer-valued or as 8-byte float64 otherwise. Wrap a number in
+ *   {@link LexFloat} to force float encoding for an integer-valued value, or
+ *   in {@link LexInteger} to assert at the call site that the value is
+ *   integral and emit a CBOR uint/negint token.
  */
 export const encodeOptions = Object.freeze<EncodeOptions>({
   float64: true,
@@ -52,6 +63,21 @@ export const encodeOptions = Object.freeze<EncodeOptions>({
         return [new Token(Type.tag, CID_CBOR_TAG), new Token(Type.bytes, bytes)]
       }
 
+      // {@link LexFloat} wrappers carry the int/float distinction from the
+      // JSON wire form. With `float64: true`, cborg emits these as
+      // deterministic 8-byte CBOR floats.
+      if (isLexFloat(obj)) {
+        return [new Token(Type.float, obj.value)]
+      }
+
+      // {@link LexInteger} wrappers assert at construction time that the
+      // value is a safe integer. Encode as the matching CBOR uint/negint
+      // token — identical on the wire to a bare integer.
+      if (isLexInteger(obj)) {
+        const n = obj.value
+        return [new Token(n < 0 ? Type.negint : Type.uint, n)]
+      }
+
       // Fallback to default object encoder
       return null
     },
@@ -59,10 +85,14 @@ export const encodeOptions = Object.freeze<EncodeOptions>({
       throw new Error('`undefined` is not supported by the AT Data Model')
     },
     number: (num: number): null => {
-      if (Number.isSafeInteger(num)) return null
+      // Finite numbers fall through to cborg's default encoder: safe integers
+      // are emitted as CBOR uint, non-integer (or out-of-safe-int range) values
+      // as 8-byte float64. NaN and Infinity are rejected — the AT Data Model
+      // has no representation for them.
+      if (Number.isFinite(num)) return null
 
       throw new Error(
-        `Non-integer numbers (${num}) are not supported by the AT Data Model`,
+        `Non-finite numbers (${num}) are not supported by the AT Data Model`,
       )
     },
   }),

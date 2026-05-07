@@ -156,7 +156,8 @@ export type ValidationOptions = {
    *   strictly equal to the input value. No transformations such as applying
    *   default values are allowed.
    * - `"parse"`: Allows the schema to transform the input value, such as
-   *   applying default values or performing type coercion.
+   *   applying default values or performing type coercion. Validation
+   *   issues fail the result.
    *
    * @default "validate"
    */
@@ -349,11 +350,11 @@ export class ValidationContext {
         return new LexValidationError(Array.from(this.issues))
       }
 
-      if (this.options.mode !== 'parse' && !Object.is(result.value, input)) {
+      if (this.options.mode === 'validate' && !Object.is(result.value, input)) {
         // If the value changed, it means that a default (or some other
         // transformation) was applied, meaning that the original value did
-        // *not* match the (output) schema. When not in "parse" mode, we
-        // consider this a failure.
+        // *not* match the (output) schema. In strict "validate" mode, we
+        // consider this a failure. "parse" mode accepts transformed values.
 
         // This check is the reason why Validator.validateInContext should not
         // be used directly, and ValidatorContext.validate should be used

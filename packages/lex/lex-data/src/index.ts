@@ -1,4 +1,6 @@
 export * from './blob.js'
+export * from './lex-float.js'
+export * from './lex-integer.js'
 export * from './cid.js'
 export * from './lex-equals.js'
 export * from './lex-error.js'
