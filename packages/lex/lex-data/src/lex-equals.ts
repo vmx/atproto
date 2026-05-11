@@ -1,3 +1,5 @@
+import { isLexFloat } from './lex-float.js'
+import { isLexInteger } from './lex-integer.js'
 import { ifCid, isCid } from './cid.js'
 import { LexValue } from './lex.js'
 import { isPlainObject } from './object.js'
@@ -12,6 +14,10 @@ import { ui8Equals } from './uint8array.js'
  * - Objects/LexMaps (recursive key-value comparison)
  * - Uint8Arrays (byte-by-byte comparison)
  * - CIDs (using CID equality)
+ * - {@link LexFloat} wrappers (compared by their `.value`; never equal to a
+ *   bare number, since the wrapper is what carries the int/float distinction)
+ * - {@link LexInteger} wrappers (compared by their `.value`; never equal to a
+ *   bare number or a {@link LexFloat}, mirroring the float wrapper)
  *
  * @param a - First LexValue to compare
  * @param b - Second LexValue to compare
@@ -84,6 +90,18 @@ export function lexEquals(a: LexValue, b: LexValue): boolean {
     // undefined) so we need to explicitly check that the output is "true".
     return ifCid(b)?.equals(a) === true
   } else if (isCid(b)) {
+    return false
+  }
+
+  if (isLexFloat(a)) {
+    return isLexFloat(b) && Object.is(a.value, b.value)
+  } else if (isLexFloat(b)) {
+    return false
+  }
+
+  if (isLexInteger(a)) {
+    return isLexInteger(b) && Object.is(a.value, b.value)
+  } else if (isLexInteger(b)) {
     return false
   }
 

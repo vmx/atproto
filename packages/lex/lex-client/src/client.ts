@@ -846,8 +846,13 @@ export class Client implements Agent {
     options: CreateOptions<T> = {} as CreateOptions<T>,
   ): Promise<CreateOutput> {
     const schema: T = getMain(ns)
-    const record = schema.build(input) as TypedLexMap<NsidString>
-    if (options?.validateRequest) schema.validate(record)
+    // Always run the input through the schema. `parse` applies wire-form
+    // transformations (bare numbers at float-typed paths become `LexFloat`
+    // so the JSON serialiser emits `65.0`; CID strings become `Cid`; etc.)
+    // and rejects validation failures locally — the producer fails fast
+    // instead of sending garbage to the server.
+    const built = schema.build(input)
+    const record = schema.parse(built) as TypedLexMap<NsidString>
     const rkey = options.rkey ?? getDefaultRecordKey(schema)
     if (rkey !== undefined) schema.keySchema.assert(rkey)
     const response = await this.createRecord(record, rkey, options)
@@ -943,8 +948,9 @@ export class Client implements Agent {
     options: PutOptions<T> = {} as PutOptions<T>,
   ): Promise<PutOutput> {
     const schema: T = getMain(ns)
-    const record = schema.build(input) as TypedLexMap<NsidString>
-    if (options?.validateRequest) schema.validate(record)
+    // See `create` for the rationale.
+    const built = schema.build(input)
+    const record = schema.parse(built) as TypedLexMap<NsidString>
     const rkey = options.rkey ?? getLiteralRecordKey(schema)
     const response = await this.putRecord(record, rkey, options)
     return response.body

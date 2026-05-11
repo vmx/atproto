@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseCid } from './cid.js'
+import { LexFloat } from './lex-float.js'
+import { LexInteger } from './lex-integer.js'
 import { isLexArray, isLexScalar, isLexValue, isTypedLexMap } from './lex.js'
 
 describe(isLexScalar, () => {
@@ -16,7 +18,11 @@ describe(isLexScalar, () => {
       expected: true,
     },
     { note: 'number (integer)', value: 42, expected: true },
-    { note: 'number (float)', value: 3.14, expected: false },
+    { note: 'number (float)', value: 3.14, expected: true },
+    { note: 'number (NaN)', value: NaN, expected: false },
+    { note: 'number (Infinity)', value: Infinity, expected: false },
+    { note: 'LexFloat', value: new LexFloat(3.14), expected: true },
+    { note: 'LexInteger', value: new LexInteger(42), expected: true },
     { note: 'object', value: { a: 1 }, expected: false },
     { note: 'array', value: [1, 2, 3], expected: false },
     { note: 'undefined', value: undefined, expected: false },
@@ -105,7 +111,8 @@ describe(isLexValue, () => {
 
   describe('invalid values', () => {
     for (const { note, value } of [
-      { note: 'float', value: 123.456 },
+      { note: 'NaN', value: NaN },
+      { note: 'Infinity', value: Infinity },
       { note: 'undefined', value: undefined },
       { note: 'function', value: () => {} },
       { note: 'obj with fn', value: { a: 123, b: () => {} } },
@@ -222,6 +229,14 @@ describe('isTypedLexMap', () => {
         },
       },
       {
+        note: 'float',
+        json: {
+          $type: 'com.example.blah',
+          a: 123.456,
+          b: 'blah',
+        },
+      },
+      {
         note: 'empty list and object',
         json: {
           $type: 'com.example.blah',
@@ -239,10 +254,10 @@ describe('isTypedLexMap', () => {
   describe('invalid records', () => {
     for (const { note, json } of [
       {
-        note: 'float',
+        note: 'NaN',
         json: {
           $type: 'com.example.blah',
-          a: 123.456,
+          a: NaN,
           b: 'blah',
         },
       },

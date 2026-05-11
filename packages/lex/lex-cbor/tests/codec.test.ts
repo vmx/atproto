@@ -1,5 +1,11 @@
 import { assert, describe, expect, it } from 'vitest'
-import { LexValue, isLexMap, parseCid } from '@atproto/lex-data'
+import {
+  LexFloat,
+  LexInteger,
+  LexValue,
+  isLexMap,
+  parseCid,
+} from '@atproto/lex-data'
 import { decode, decodeAll, encode } from '../src/index.js'
 
 describe('encode', () => {
@@ -12,8 +18,56 @@ describe('encode', () => {
     )
   })
 
-  it('throws when encoding floats', () => {
-    expect(() => encode({ value: 3.14 })).toThrow()
+  it('encodes finite non-integer numbers as CBOR float64', () => {
+    // Bare finite numbers are valid LexValues; the encoder routes
+    // non-integer values to the cborg default (8-byte float64) rather than
+    // throwing.
+    const bytes = encode({ value: 3.14 })
+    expect(decode(bytes)).toStrictEqual({ value: 3.14 })
+    // 0xfb is the CBOR major type tag for 8-byte float.
+    expect(bytes).toContain(0xfb)
+  })
+
+  describe('LexInteger wrappers', () => {
+    it('encodes a positive LexInteger as CBOR uint (identical to bare)', () => {
+      const wrapped = encode({ value: new LexInteger(99) })
+      const bare = encode({ value: 99 })
+      expect(wrapped).toEqual(bare)
+      expect(decode(wrapped)).toStrictEqual({ value: 99 })
+    })
+
+    it('encodes zero as CBOR uint', () => {
+      const wrapped = encode({ value: new LexInteger(0) })
+      const bare = encode({ value: 0 })
+      expect(wrapped).toEqual(bare)
+    })
+
+    it('encodes a negative LexInteger as CBOR negint (identical to bare)', () => {
+      const wrapped = encode({ value: new LexInteger(-5) })
+      const bare = encode({ value: -5 })
+      expect(wrapped).toEqual(bare)
+      expect(decode(wrapped)).toStrictEqual({ value: -5 })
+    })
+
+    it('does not produce float64 markers for LexInteger', () => {
+      const bytes = encode({ value: new LexInteger(99) })
+      expect(bytes).not.toContain(0xfb)
+    })
+
+    it('encodes LexInteger and LexFloat distinctly at the same numeric value', () => {
+      const asInt = encode({ value: new LexInteger(42) })
+      const asFloat = encode({ value: new LexFloat(42) })
+      expect(asInt).not.toEqual(asFloat)
+      // The float-wrapped form must carry the float64 tag.
+      expect(asFloat).toContain(0xfb)
+      expect(asInt).not.toContain(0xfb)
+    })
+  })
+
+  it('throws when encoding NaN or Infinity', () => {
+    expect(() => encode({ value: NaN })).toThrow()
+    expect(() => encode({ value: Infinity })).toThrow()
+    expect(() => encode({ value: -Infinity })).toThrow()
   })
 
   it('Supports encoding "undefined" values', () => {
