@@ -1,3 +1,4 @@
+import { isLexInteger } from '@atproto/lex-data'
 import { Schema, ValidationContext } from '../core.js'
 import { memoizedOptions } from '../util/memoize.js'
 
@@ -18,6 +19,10 @@ export type IntegerSchemaOptions = {
  * Only accepts safe integers (values that can be exactly represented in JavaScript).
  * Use {@link IntegerSchemaOptions} to constrain the allowed range.
  *
+ * Numbers wrapped in {@link LexInteger} are accepted alongside bare integers;
+ * the wrapper is unwrapped for range checks but preserved on success so the
+ * producer-side intent flows through to the CBOR encoder.
+ *
  * @example
  * ```ts
  * const schema = new IntegerSchema({ minimum: 0, maximum: 100 })
@@ -32,16 +37,20 @@ export class IntegerSchema extends Schema<number> {
   }
 
   validateInContext(input: unknown, ctx: ValidationContext) {
-    if (!isInteger(input)) {
+    // `LexInteger` is a producer-side assertion that the value is integral;
+    // accept it alongside bare safe integers and unwrap for range checks.
+    // Mirror of `FloatSchema`, which accepts `LexFloat` the same way.
+    const numeric = isLexInteger(input) ? input.value : input
+    if (!isInteger(numeric)) {
       return ctx.issueUnexpectedType(input, 'integer')
     }
 
-    if (this.options?.minimum != null && input < this.options.minimum) {
-      return ctx.issueTooSmall(input, 'integer', this.options.minimum, input)
+    if (this.options?.minimum != null && numeric < this.options.minimum) {
+      return ctx.issueTooSmall(input, 'integer', this.options.minimum, numeric)
     }
 
-    if (this.options?.maximum != null && input > this.options.maximum) {
-      return ctx.issueTooBig(input, 'integer', this.options.maximum, input)
+    if (this.options?.maximum != null && numeric > this.options.maximum) {
+      return ctx.issueTooBig(input, 'integer', this.options.maximum, numeric)
     }
 
     return ctx.success(input)

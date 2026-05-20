@@ -14,6 +14,7 @@ describe(lexValue, () => {
       { note: 'integer', value: 42 },
       { note: 'negative integer', value: -1 },
       { note: 'zero', value: 0 },
+      { note: 'float', value: 42.5 },
       { note: 'Uint8Array', value: new Uint8Array([1, 2, 3]) },
       {
         note: 'Cid',
@@ -57,7 +58,9 @@ describe(lexValue, () => {
 
   describe('invalid values', () => {
     for (const { note, value } of [
-      { note: 'float', value: 42.5 },
+      { note: 'NaN', value: NaN },
+      { note: 'Infinity', value: Infinity },
+      { note: '-Infinity', value: -Infinity },
       { note: 'undefined', value: undefined },
       { note: 'function', value: () => {} },
       { note: 'Date object', value: new Date() },
