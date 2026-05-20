@@ -1,3 +1,4 @@
+import { LexFloat, LexInteger } from '@atproto/lex-data'
 import { describe, expect, it } from 'vitest'
 import * as com from './lexicons/com.js'
 
@@ -54,5 +55,28 @@ describe('integer', () => {
         integer: 2.5,
       }),
     ).toThrow('Expected integer value type (got 2.5) at $.integer')
+  })
+
+  it('Accepts LexInteger-wrapped values', () => {
+    com.example.integerRange.$parse({
+      $type: 'com.example.integerRange',
+      integer: new LexInteger(3),
+    })
+    expect(() =>
+      com.example.integerRange.$parse({
+        $type: 'com.example.integerRange',
+        integer: new LexInteger(5),
+      }),
+    ).toThrow('integer too big (maximum 4, got 5) at $.integer')
+  })
+
+  it('Rejects LexFloat at an integer-typed field', () => {
+    expect(() =>
+      com.example.integerRange.$parse({
+        $type: 'com.example.integerRange',
+        // @ts-expect-error LexFloat is not assignable to integer field
+        integer: new LexFloat(3),
+      }),
+    ).toThrow('Expected integer value type')
   })
 })

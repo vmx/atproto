@@ -1,0 +1,20 @@
+{
+  "name": "@atproto/floats-demo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "End-to-end demo that exercises float preservation from the JSON wire form through to CBOR storage on a live PDS.",
+  "type": "module",
+  "scripts": {
+    "demo:encoding": "node demo-encoding.mjs",
+    "demo:pds": "node demo-pds.mjs"
+  },
+  "dependencies": {
+    "@atproto/lex": "workspace:^",
+    "@atproto/lex-cbor": "workspace:^",
+    "@atproto/lex-data": "workspace:^",
+    "@atproto/lex-document": "workspace:^",
+    "@atproto/lex-json": "workspace:^",
+    "@atproto/lex-password-session": "workspace:^",
+    "cborg": "^4.5.8"
+  }
+}

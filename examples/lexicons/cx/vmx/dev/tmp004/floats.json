@@ -1,0 +1,36 @@
+{
+  "lexicon": 1,
+  "id": "cx.vmx.dev.tmp004.floats",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "any",
+      "description": "Sample reading with two float-typed fields.",
+      "record": {
+        "type": "object",
+        "required": ["temperature", "humidity", "sampleCount", "label"],
+        "properties": {
+          "temperature": {
+            "type": "float",
+            "description": "Temperature reading. Float-typed: integer-valued numbers like 20 are still serialised as CBOR float64."
+          },
+          "humidity": {
+            "type": "float",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Relative humidity as a percentage."
+          },
+          "sampleCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of samples averaged to produce this reading."
+          },
+          "label": {
+            "type": "string",
+            "description": "Free-form label describing the reading."
+          }
+        }
+      }
+    }
+  }
+}

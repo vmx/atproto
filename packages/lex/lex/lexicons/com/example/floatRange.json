@@ -1,0 +1,20 @@
+{
+  "lexicon": 1,
+  "id": "com.example.floatRange",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "any",
+      "record": {
+        "type": "object",
+        "properties": {
+          "float": {
+            "type": "float",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    }
+  }
+}

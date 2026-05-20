@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { LexFloat, LexInteger } from '@atproto/lex-data'
+import { assert, describe, expect, it } from 'vitest'
+import { object } from './object.js'
 import { integer } from './integer.js'
 import { withDefault } from './with-default.js'
 
@@ -79,6 +81,79 @@ describe('IntegerSchema', () => {
     it('rejects -Infinity', () => {
       const result = schema.safeParse(-Infinity)
       expect(result.success).toBe(false)
+    })
+  })
+
+  describe('float-demotion guard', () => {
+    // Regression coverage for the bug where a non-integer number at an
+    // integer-typed field could slip through to the CBOR encoder and become
+    // a float64 token. `IntegerSchema` must always reject these.
+    const schema = integer()
+
+    it('rejects a non-integer number', () => {
+      const result = schema.safeParse(3.14)
+      assert(!result.success)
+      expect(result.reason.issues[0]).toMatchObject({
+        code: 'invalid_type',
+        expected: ['integer'],
+      })
+    })
+
+    it('rejects a LexFloat', () => {
+      expect(schema.safeParse(new LexFloat(3.14)).success).toBe(false)
+    })
+
+    it('rejects a LexFloat at an integer value', () => {
+      // Even integer-valued LexFloats must be rejected — they encode as
+      // CBOR float64.
+      expect(schema.safeParse(new LexFloat(42)).success).toBe(false)
+    })
+
+    it('object schema propagates the rejection from a nested integer', () => {
+      const schema = object({
+        count: integer(),
+        label: integer(),
+      })
+      const result = schema.safeParse({ count: 3.14, label: 5 })
+      assert(!result.success)
+      expect(result.reason.issues[0]).toMatchObject({
+        code: 'invalid_type',
+        path: ['count'],
+        expected: ['integer'],
+      })
+    })
+  })
+
+  describe('LexInteger wrappers', () => {
+    const schema = integer()
+
+    it('accepts LexInteger wrapping a safe integer', () => {
+      const result = schema.safeParse(new LexInteger(42))
+      assert(result.success)
+      expect(result.value).toBeInstanceOf(LexInteger)
+      expect((result.value as LexInteger).value).toBe(42)
+    })
+
+    it('accepts LexInteger wrapping zero', () => {
+      expect(schema.safeParse(new LexInteger(0)).success).toBe(true)
+    })
+
+    it('accepts LexInteger wrapping negative integers', () => {
+      expect(schema.safeParse(new LexInteger(-7)).success).toBe(true)
+    })
+
+    it('preserves the wrapper through validation (no unwrap)', () => {
+      const wrapped = new LexInteger(42)
+      const result = schema.safeParse(wrapped)
+      assert(result.success)
+      expect(result.value).toBe(wrapped)
+    })
+
+    it('respects range constraints for LexInteger values', () => {
+      const ranged = integer({ minimum: 0, maximum: 100 })
+      expect(ranged.safeParse(new LexInteger(50)).success).toBe(true)
+      expect(ranged.safeParse(new LexInteger(150)).success).toBe(false)
+      expect(ranged.safeParse(new LexInteger(-1)).success).toBe(false)
     })
   })
 

@@ -2,6 +2,15 @@ import { l } from '@atproto/lex-schema'
 
 // https://atproto.com/specs/lexicon
 
+// `l.float()` would coerce bare numbers into `LexFloat` in parse mode, which
+// is the right thing for record data but the wrong thing for schema metadata
+// like `minimum`/`maximum` bounds. We use a non-coercing finite-number check
+// for those.
+const finiteNumberSchema = l.custom(
+  (v): v is number => typeof v === 'number' && Number.isFinite(v),
+  'Expected a finite number',
+)
+
 // "Concrete" Types
 
 /**
@@ -52,6 +61,32 @@ export const lexiconIntegerSchema = l.object({
  * @see {@link lexiconIntegerSchema} for the schema definition
  */
 export type LexiconInteger = l.Infer<typeof lexiconIntegerSchema>
+
+/**
+ * Schema for validating Lexicon float type definitions.
+ *
+ * Validates floating-point field definitions with support for default values,
+ * minimum/maximum constraints, enumerated values, and constant values.
+ */
+export const lexiconFloatSchema = l.object({
+  type: l.literal('float'),
+  default: l.optional(finiteNumberSchema),
+  minimum: l.optional(finiteNumberSchema),
+  maximum: l.optional(finiteNumberSchema),
+  enum: l.optional(l.array(finiteNumberSchema)),
+  const: l.optional(finiteNumberSchema),
+  description: l.optional(l.string()),
+})
+
+/**
+ * TypeScript type for a Lexicon float definition.
+ *
+ * Represents the structure of a float field in a Lexicon document,
+ * including optional constraints like minimum, maximum, enum, and const.
+ *
+ * @see {@link lexiconFloatSchema} for the schema definition
+ */
+export type LexiconFloat = l.Infer<typeof lexiconFloatSchema>
 
 /**
  * Schema for validating Lexicon string type definitions.
@@ -152,11 +187,12 @@ export type LexiconBlob = l.Infer<typeof lexiconBlobSchema>
 
 /**
  * Array of all concrete (primitive) Lexicon type schemas.
- * Includes boolean, integer, string, bytes, cid-link, and blob types.
+ * Includes boolean, integer, float, string, bytes, cid-link, and blob types.
  */
 const CONCRETE_TYPES = [
   lexiconBooleanSchema,
   lexiconIntegerSchema,
+  lexiconFloatSchema,
   lexiconStringSchema,
   // Lexicon (DAG-CBOR)
   lexiconBytesSchema,

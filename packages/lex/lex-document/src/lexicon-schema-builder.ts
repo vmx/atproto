@@ -317,6 +317,21 @@ export class LexiconSchemaBuilder implements AsyncDisposable {
 
         return def.default != null ? l.withDefault(result, def.default) : result
       }
+      case 'float': {
+        const schema = l.float(def)
+        if (def.default != null) schema.check(def.default)
+        if (def.const != null) schema.check(def.const)
+        if (def.enum != null) for (const v of def.enum) schema.check(v)
+
+        const result =
+          def.const != null
+            ? l.literal(def.const)
+            : def.enum != null
+              ? l.enum(def.enum)
+              : schema
+
+        return def.default != null ? l.withDefault(result, def.default) : result
+      }
       case 'boolean': {
         const result = def.const != null ? l.literal(def.const) : l.boolean()
 

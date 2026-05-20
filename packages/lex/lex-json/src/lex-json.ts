@@ -1,16 +1,72 @@
 import {
   BlobRef,
+  LexFloat,
   Cid,
   LexArray,
   LexMap,
   LexValue,
+  isLexFloat,
+  isLexInteger,
   isCid,
   utf8FromBytes,
 } from '@atproto/lex-data'
 import { parseTypedBlobRef } from './blob.js'
 import { encodeLexBytes, parseLexBytes } from './bytes.js'
-import { JsonObject, JsonValue } from './json.js'
+import { JsonScalar, JsonValue } from './json.js'
 import { encodeLexLink, parseLexLink } from './link.js'
+
+/**
+ * The shape produced by `JSON.parse` when run with
+ * {@link floatPreservingReviver}. Identical to {@link JsonValue} except that
+ * any number whose JSON source contained `.`, `e`, or `E` has been wrapped in
+ * a {@link LexFloat}. Every {@link JsonValue} is also a `RevivedJsonValue`,
+ * so existing call sites that pass plain `JsonValue` keep type-checking.
+ */
+export type RevivedJsonValue =
+  | JsonScalar
+  | LexFloat
+  | RevivedJsonValue[]
+  | { [_ in string]?: RevivedJsonValue }
+
+/**
+ * Object-shaped {@link RevivedJsonValue} — used internally by
+ * {@link jsonToLex}'s map walker.
+ */
+type RevivedJsonObject = { [_ in string]?: RevivedJsonValue }
+
+// `JSON.rawJSON` is ES2025 and not in the TS lib (set to ES2023). Type-assert
+// once and use the cached reference everywhere.
+type JsonRawJSON = (text: string) => unknown
+const jsonRawJSON = (JSON as { rawJSON?: JsonRawJSON }).rawJSON
+
+// Both pieces of the ES2025 "JSON parse with source" proposal are required.
+// The reviver source-context arg preserves the int/float distinction on parse:
+// a number whose source contained `.`, `e`, or `E` is wrapped in a
+// {@link LexFloat}. `JSON.rawJSON` lets {@link lexStringify} emit `65.0` for an
+// integer-valued `LexFloat` — a textual distinction JS numbers cannot carry on
+// their own (`65.0 === 65` at the value level). Both ship together in V8 12.4
+// / Node 22+. Fail loudly at module load instead of at first float, so
+// misconfigured deployments surface the problem at startup.
+;(function assertJsonSourceTextAccess(): void {
+  let reviverSupported = false
+  JSON.parse('1', (_key: string, value: unknown, context?: unknown) => {
+    if (
+      typeof context === 'object' &&
+      context !== null &&
+      typeof (context as { source?: unknown }).source === 'string'
+    ) {
+      reviverSupported = true
+    }
+    return value
+  })
+  if (!reviverSupported || typeof jsonRawJSON !== 'function') {
+    throw new Error(
+      '@atproto/lex-json requires the JSON.parse reviver source context and ' +
+        'JSON.rawJSON (ES2025). Upgrade to Node.js 22+ or a runtime with ' +
+        'V8 12.4+.',
+    )
+  }
+})()
 
 /**
  * Serialize a Lex value to a JSON string.
@@ -19,6 +75,9 @@ import { encodeLexLink, parseLexLink } from './link.js'
  * encoding special types:
  * - `Cid` instances are encoded as `{$link: string}`
  * - `Uint8Array` instances are encoded as `{$bytes: string}` (base64)
+ * - `LexFloat` instances are emitted with a forced decimal point for
+ *   integer-valued numbers (e.g. `65` → `65.0`), preserving the int/float
+ *   distinction the AT data model carries through JSON
  *
  * @param input - The Lex value to stringify
  * @returns A JSON string representation of the value
@@ -36,10 +95,29 @@ import { encodeLexLink, parseLexLink } from './link.js'
  * ```
  */
 export function lexStringify(input: LexValue): string {
-  // @NOTE Because of the way the "replacer" works in JSON.stringify, it's
-  // simpler to convert Lex to JSON first rather than trying to do it
-  // on-the-fly.
-  return JSON.stringify(lexToJson(input))
+  // Pre-convert specials in one walk so {@link JSON.stringify} sees a plain
+  // tree. We can't use a `JSON.stringify` replacer to do this work because
+  // `toJSON` runs *before* the replacer (per spec), and both `multiformats`
+  // {@link Cid} and Node's `Buffer` define `toJSON`, so the replacer would
+  // never see them as themselves. Going through the shared walker also lets
+  // {@link LexFloat} be materialized as a {@link JSON.rawJSON} token, which
+  // {@link JSON.stringify} emits verbatim — that token is the only way to get
+  // `65.0` on the wire, since `65.0 === 65` at the JS value level.
+  return JSON.stringify(lexToJsonWith(input, rawFloatToken))
+}
+
+const rawFloatToken: LexFloatHandler = (f) => jsonRawJSON!(formatLexFloat(f))
+
+function formatLexFloat(wrapper: LexFloat): string {
+  const n = wrapper.value
+  if (!Number.isFinite(n)) {
+    throw new TypeError(`Non-finite number in LexFloat: ${n}`)
+  }
+  const s = String(n)
+  // `Number.prototype.toString` already emits `.` for non-integer values and
+  // `e` for very small/large magnitudes. Only integer-valued floats need the
+  // explicit `.0` to preserve the float distinction through JSON.parse.
+  return /[.eE]/.test(s) ? s : s + '.0'
 }
 
 /**
@@ -100,9 +178,44 @@ export function lexParse<T extends LexValue = LexValue>(
   input: string,
   options: LexParseOptions = { strict: false },
 ): T {
-  // @NOTE see ./lex-json.bench.ts for performance comparison of implementation
-  // that uses a reviver function in JSON.parse vs. the current implementation.
-  return jsonToLex(JSON.parse(input), options) as T
+  // Preserve the int/float distinction that is present in the JSON source text
+  // but lost by a naive `JSON.parse`. Numbers whose source contained `.`, `e`,
+  // or `E` are wrapped in {@link LexFloat}; plain digit-only numbers pass
+  // through as JS numbers. The context-aware third argument of the reviver is
+  // part of the ES2025 "JSON parse with source" proposal and asserted at
+  // module load.
+  return jsonToLex(
+    JSON.parse(input, floatPreservingReviver) as RevivedJsonValue,
+    options,
+  ) as T
+}
+
+type JsonParseContext = { readonly source: string }
+
+/**
+ * `JSON.parse` reviver that wraps any number whose JSON source text contained
+ * `.`, `e`, or `E` in a {@link LexFloat}. Digit-only numbers pass through as
+ * bare JS numbers.
+ *
+ * Exported so body parsers that do their own `JSON.parse` (e.g. an HTTP
+ * framework's JSON middleware) can opt into the same int/float-distinction
+ * preservation that {@link lexParse} applies internally.
+ *
+ * @remarks The third argument is part of the ES2025 "JSON parse with source"
+ * proposal (Node 22+ / V8 12.4+); the module-load runtime assertion above
+ * guarantees the runtime supplies it. The parameter stays optional only so
+ * the function shape matches the 2-arg reviver type expected by
+ * `JSON.parse`-style APIs (e.g. body-parser's `json()`).
+ */
+export function floatPreservingReviver(
+  _key: string,
+  value: unknown,
+  context?: JsonParseContext,
+): unknown {
+  if (typeof value === 'number' && context && /[.eE]/.test(context.source)) {
+    return new LexFloat(value)
+  }
+  return value
 }
 
 /**
@@ -152,12 +265,13 @@ export function lexParseJsonBytes(
  * ```
  */
 export function jsonToLex(
-  value: JsonValue,
+  value: RevivedJsonValue,
   options: LexParseOptions = { strict: false },
 ): LexValue {
   switch (typeof value) {
     case 'object': {
       if (value === null) return null
+      if (isLexFloat(value)) return value
       if (Array.isArray(value)) return jsonArrayToLex(value, options)
       return (
         parseSpecialJsonObject(value, options) ??
@@ -177,7 +291,7 @@ export function jsonToLex(
 }
 
 function jsonArrayToLex(
-  input: JsonValue[],
+  input: RevivedJsonValue[],
   options: LexParseOptions,
 ): LexValue[] {
   // Lazily copy value
@@ -186,15 +300,15 @@ function jsonArrayToLex(
     const inputItem = input[i]
     const item = jsonToLex(inputItem, options)
     if (item !== inputItem) {
-      copy ??= Array.from(input)
+      copy ??= Array.from(input) as LexValue[]
       copy[i] = item
     }
   }
-  return copy ?? input
+  return (copy ?? input) as LexValue[]
 }
 
 function jsonObjectToLexMap(
-  input: JsonObject,
+  input: RevivedJsonObject,
   options: LexParseOptions,
 ): LexMap {
   // Lazily copy value
@@ -207,18 +321,18 @@ function jsonObjectToLexMap(
 
     // Ignore (strip) undefined values
     if (jsonValue === undefined) {
-      copy ??= { ...input }
+      copy ??= { ...input } as LexMap
       delete copy[key]
       continue
     }
 
-    const value = jsonToLex(jsonValue!, options)
+    const value = jsonToLex(jsonValue, options)
     if (value !== jsonValue) {
-      copy ??= { ...input }
+      copy ??= { ...input } as LexMap
       copy[key] = value
     }
   }
-  return copy ?? input
+  return (copy ?? input) as LexMap
 }
 
 /**
@@ -249,19 +363,34 @@ function jsonObjectToLexMap(
  * ```
  */
 export function lexToJson(value: LexValue): JsonValue {
+  // {@link LexFloat} unwraps to a plain number here — lossy on purpose, since
+  // a {@link JsonValue} cannot represent the integer-valued `.0` distinction.
+  // Callers that need the distinction on the wire use {@link lexStringify},
+  // which feeds the same walker but with {@link rawFloatToken} instead.
+  return lexToJsonWith(value, unwrapFloat) as JsonValue
+}
+
+const unwrapFloat: LexFloatHandler = (f) => f.value
+
+// Decides how each {@link LexFloat} encountered during the walk is
+// materialized: numerically (for {@link lexToJson}) or as a raw JSON token
+// (for {@link lexStringify}).
+type LexFloatHandler = (wrapper: LexFloat) => unknown
+
+// Shared walker for {@link lexToJson} and {@link lexStringify}. The two paths
+// only differ in how {@link LexFloat} is realized; everything else (Cid,
+// Uint8Array, LexInteger, plain objects/arrays, prototype-pollution guard,
+// undefined-stripping, lazy-copy on change) is identical.
+function lexToJsonWith(value: LexValue, onFloat: LexFloatHandler): unknown {
   switch (typeof value) {
     case 'object':
-      if (value === null) {
-        return value
-      } else if (Array.isArray(value)) {
-        return lexArrayToJson(value)
-      } else if (isCid(value)) {
-        return encodeLexLink(value)
-      } else if (ArrayBuffer.isView(value)) {
-        return encodeLexBytes(value)
-      } else {
-        return encodeLexMap(value)
-      }
+      if (value === null) return null
+      if (isLexFloat(value)) return onFloat(value)
+      if (isLexInteger(value)) return value.value
+      if (Array.isArray(value)) return lexArrayToJsonWith(value, onFloat)
+      if (isCid(value)) return encodeLexLink(value)
+      if (ArrayBuffer.isView(value)) return encodeLexBytes(value)
+      return encodeLexMapWith(value, onFloat)
     case 'boolean':
     case 'string':
     case 'number':
@@ -271,23 +400,29 @@ export function lexToJson(value: LexValue): JsonValue {
   }
 }
 
-function lexArrayToJson(input: LexArray): JsonValue[] {
+function lexArrayToJsonWith(
+  input: LexArray,
+  onFloat: LexFloatHandler,
+): unknown[] {
   // Lazily copy value
-  let copy: JsonValue[] | undefined
+  let copy: unknown[] | undefined
   for (let i = 0; i < input.length; i++) {
     const inputItem = input[i]
-    const item = lexToJson(inputItem)
+    const item = lexToJsonWith(inputItem, onFloat)
     if (item !== inputItem) {
-      copy ??= Array.from(input) as JsonValue[]
+      copy ??= Array.from(input) as unknown[]
       copy[i] = item
     }
   }
-  return copy ?? (input as JsonValue[])
+  return copy ?? (input as unknown[])
 }
 
-function encodeLexMap(input: LexMap): JsonObject {
+function encodeLexMapWith(
+  input: LexMap,
+  onFloat: LexFloatHandler,
+): Record<string, unknown> {
   // Lazily copy value
-  let copy: JsonObject | undefined = undefined
+  let copy: Record<string, unknown> | undefined
   for (const [key, lexValue] of Object.entries(input)) {
     // Prevent prototype pollution
     if (key === '__proto__') {
@@ -296,18 +431,18 @@ function encodeLexMap(input: LexMap): JsonObject {
 
     // Ignore (strip) undefined values
     if (lexValue === undefined) {
-      copy ??= { ...input } as JsonObject
+      copy ??= { ...input } as Record<string, unknown>
       delete copy[key]
       continue
     }
 
-    const jsonValue = lexToJson(lexValue!)
+    const jsonValue = lexToJsonWith(lexValue!, onFloat)
     if (jsonValue !== lexValue) {
-      copy ??= { ...input } as JsonObject
+      copy ??= { ...input } as Record<string, unknown>
       copy[key] = jsonValue
     }
   }
-  return copy ?? (input as JsonObject)
+  return copy ?? (input as Record<string, unknown>)
 }
 
 /**

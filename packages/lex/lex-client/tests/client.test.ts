@@ -434,10 +434,7 @@ describe('Client', () => {
             displayName: 'Alice Generator',
             createdAt: '2024-01-01T00:00:00Z',
           },
-          {
-            rkey: 'alice-generator',
-            validateRequest: true,
-          },
+          { rkey: 'alice-generator' },
         )
       }).rejects.toThrow('Invalid DID (got "not-a-did") at $.did')
 
@@ -623,11 +620,14 @@ describe('Client', () => {
     })
   })
 
-  describe('validateRequest option', () => {
+  describe('local validation', () => {
+    // `Client.create` / `Client.put` always run input through the record
+    // schema before sending. Invalid input throws locally and the
+    // fetchHandler is never called.
     const did = 'did:plc:ewvi7nxzyoun6zhxrhs64oiz' as const
 
     describe('create()', () => {
-      it('validates locally when validateRequest: true', async () => {
+      it('rejects an invalid string format', async () => {
         const fetchHandler = vi.fn<FetchHandler>()
         const client = new Client({ fetchHandler, did })
 
@@ -640,7 +640,7 @@ describe('Client', () => {
               displayName: 'Test',
               createdAt: toDatetimeString(new Date()),
             },
-            { rkey: 'test', validateRequest: true },
+            { rkey: 'test' },
           ),
         ).rejects.toSatisfy((err) => {
           assert(err instanceof LexValidationError)
@@ -651,53 +651,7 @@ describe('Client', () => {
         expect(fetchHandler).not.toHaveBeenCalled()
       })
 
-      it('skips local validation when validateRequest: false', async () => {
-        const fetchHandler = vi.fn<FetchHandler>(async () => {
-          return Response.json({
-            uri: `at://${did}/app.bsky.feed.generator/test`,
-            cid: cborCid.toString(),
-          })
-        })
-        const client = new Client({ fetchHandler, did })
-
-        await client.create(
-          app.bsky.feed.generator,
-          {
-            // @ts-expect-error invalid DID
-            did: 'not-a-did',
-            displayName: 'Test',
-            createdAt: toDatetimeString(new Date()),
-          },
-          { rkey: 'test', validateRequest: false },
-        )
-
-        expect(fetchHandler).toHaveBeenCalled()
-      })
-
-      it('defaults to not validating', async () => {
-        const fetchHandler = vi.fn<FetchHandler>(async () => {
-          return Response.json({
-            uri: `at://${did}/app.bsky.feed.generator/test`,
-            cid: cborCid.toString(),
-          })
-        })
-        const client = new Client({ fetchHandler, did })
-
-        await client.create(
-          app.bsky.feed.generator,
-          {
-            // @ts-expect-error invalid DID
-            did: 'not-a-did',
-            displayName: 'Test',
-            createdAt: toDatetimeString(new Date()),
-          },
-          { rkey: 'test' },
-        )
-
-        expect(fetchHandler).toHaveBeenCalled()
-      })
-
-      it('validates required fields when validateRequest: true', async () => {
+      it('rejects missing required fields', async () => {
         const fetchHandler = vi.fn<FetchHandler>()
         const client = new Client({ fetchHandler, did })
 
@@ -708,7 +662,7 @@ describe('Client', () => {
             {
               displayName: 'Test',
             },
-            { rkey: 'test', validateRequest: true },
+            { rkey: 'test' },
           ),
         ).rejects.toSatisfy((err) => {
           assert(err instanceof LexValidationError)
@@ -719,7 +673,7 @@ describe('Client', () => {
         expect(fetchHandler).not.toHaveBeenCalled()
       })
 
-      it('validates types when validateRequest: true', async () => {
+      it('rejects type mismatches', async () => {
         const fetchHandler = vi.fn<FetchHandler>()
         const client = new Client({ fetchHandler, did })
 
@@ -732,7 +686,7 @@ describe('Client', () => {
               displayName: 123,
               createdAt: toDatetimeString(new Date()),
             },
-            { rkey: 'test', validateRequest: true },
+            { rkey: 'test' },
           ),
         ).rejects.toSatisfy((err) => {
           assert(err instanceof LexValidationError)
@@ -745,19 +699,15 @@ describe('Client', () => {
     })
 
     describe('put()', () => {
-      it('validates locally when validateRequest: true', async () => {
+      it('rejects type mismatches', async () => {
         const fetchHandler = vi.fn<FetchHandler>()
         const client = new Client({ fetchHandler, did })
 
         await expect(
-          client.put(
-            app.bsky.actor.profile,
-            {
-              // @ts-expect-error invalid data
-              displayName: 123,
-            },
-            { validateRequest: true },
-          ),
+          client.put(app.bsky.actor.profile, {
+            // @ts-expect-error invalid data
+            displayName: 123,
+          }),
         ).rejects.toSatisfy((err) => {
           assert(err instanceof LexValidationError)
           expect(err.message).toMatch('Expected string value type (got 123)')
@@ -765,44 +715,6 @@ describe('Client', () => {
         })
 
         expect(fetchHandler).not.toHaveBeenCalled()
-      })
-
-      it('skips local validation when validateRequest: false', async () => {
-        const fetchHandler = vi.fn<FetchHandler>(async () => {
-          return Response.json({
-            uri: `at://${did}/app.bsky.actor.profile/self`,
-            cid: cborCid.toString(),
-          })
-        })
-        const client = new Client({ fetchHandler, did })
-
-        await client.put(
-          app.bsky.actor.profile,
-          {
-            // @ts-expect-error invalid data
-            displayName: 123,
-          },
-          { validateRequest: false },
-        )
-
-        expect(fetchHandler).toHaveBeenCalled()
-      })
-
-      it('defaults to not validating', async () => {
-        const fetchHandler = vi.fn<FetchHandler>(async () => {
-          return Response.json({
-            uri: `at://${did}/app.bsky.actor.profile/self`,
-            cid: cborCid.toString(),
-          })
-        })
-        const client = new Client({ fetchHandler, did })
-
-        await client.put(app.bsky.actor.profile, {
-          // @ts-expect-error invalid data
-          displayName: 123,
-        })
-
-        expect(fetchHandler).toHaveBeenCalled()
       })
     })
   })

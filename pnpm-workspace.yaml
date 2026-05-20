@@ -4,3 +4,4 @@ packages:
   - 'packages/lex/*'
   - 'packages/oauth/*'
   - 'packages/internal/*'
+  - 'examples'
